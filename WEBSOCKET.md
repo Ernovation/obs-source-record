@@ -171,7 +171,8 @@ All events include the following base fields:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `sourceName` | string | Name of the OBS source the filter is attached to. |
+| `source` | string | Name of the OBS source the filter is attached to. |
+| `filter` | string | Name of the Source Record filter. |
 
 ### `RecordingStarted`
 
@@ -179,7 +180,8 @@ Fired when a recording output starts successfully.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `sourceName` | string | Source name. |
+| `source` | string | Source name. |
+| `filter` | string | Filter name. |
 | `outputPath` | string | Path of the file being recorded. |
 
 ### `RecordingStopped`
@@ -188,7 +190,8 @@ Fired when a recording output stops.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `sourceName` | string | Source name. |
+| `source` | string | Source name. |
+| `filter` | string | Filter name. |
 | `outputPath` | string | Path of the file that was recorded. |
 
 ### `ReplayBufferStarted`
@@ -197,7 +200,8 @@ Fired when the replay buffer starts successfully.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `sourceName` | string | Source name. |
+| `source` | string | Source name. |
+| `filter` | string | Filter name. |
 
 ### `ReplayBufferStopped`
 
@@ -205,16 +209,18 @@ Fired when the replay buffer stops.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `sourceName` | string | Source name. |
+| `source` | string | Source name. |
+| `filter` | string | Filter name. |
 
 ### `ReplayBufferSaved`
 
-Fired when a replay is saved to disk.
+Fired when a replay is saved to disk. The file is fully written and closed by the time this event is emitted.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `sourceName` | string | Source name. |
-| `outputPath` | string | Full path of the saved replay file. |
+| `source` | string | Source name. |
+| `filter` | string | Filter name. |
+| `savedPath` | string | Full path of the saved replay file. |
 
 ### `StreamingStarted`
 
@@ -222,7 +228,8 @@ Fired when a streaming output starts successfully.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `sourceName` | string | Source name. |
+| `source` | string | Source name. |
+| `filter` | string | Filter name. |
 | `serverUrl` | string | The RTMP/WHIP server URL being streamed to. |
 
 ### `StreamingStopped`
@@ -231,5 +238,6 @@ Fired when a streaming output stops.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `sourceName` | string | Source name. |
+| `source` | string | Source name. |
+| `filter` | string | Filter name. |
 | `serverUrl` | string | The RTMP/WHIP server URL that was streamed to. |

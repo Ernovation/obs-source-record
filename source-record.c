@@ -75,7 +75,8 @@ static obs_data_t *source_record_make_event_data(struct source_record_filter_con
 	obs_data_t *data = obs_data_create();
 	obs_source_t *parent = obs_filter_get_parent(context->source);
 	if (parent)
-		obs_data_set_string(data, "sourceName", obs_source_get_name(parent));
+		obs_data_set_string(data, "source", obs_source_get_name(parent));
+	obs_data_set_string(data, "filter", obs_source_get_name(context->source));
 	if (output) {
 		obs_data_t *settings = obs_output_get_settings(output);
 		if (settings) {
