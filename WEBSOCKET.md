@@ -220,7 +220,7 @@ Fired when a replay is saved to disk. The file is fully written and closed by th
 |-------|------|-------------|
 | `source` | string | Source name. |
 | `filter` | string | Filter name. |
-| `savedPath` | string | Full path of the saved replay file. |
+| `outputPath` | string | Full path of the saved replay file. |
 
 ### `StreamingStarted`
 
