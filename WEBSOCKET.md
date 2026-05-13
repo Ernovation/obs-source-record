@@ -214,7 +214,7 @@ Fired when a replay is saved to disk.
 | Field | Type | Description |
 |-------|------|-------------|
 | `sourceName` | string | Source name. |
-| `savedPath` | string | Full path of the saved replay file. |
+| `outputPath` | string | Full path of the saved replay file. |
 
 ### `StreamingStarted`
 
