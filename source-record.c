@@ -2605,17 +2605,17 @@ bool obs_module_load(void)
 	da_init(source_record_filters);
 
 	vendor = obs_websocket_register_vendor("source-record");
-	obs_websocket_vendor_register_request(vendor, "record_start", websocket_start_record, NULL);
-	obs_websocket_vendor_register_request(vendor, "record_pause", websocket_pause_record, NULL);
-	obs_websocket_vendor_register_request(vendor, "record_unpause", websocket_unpause_record, NULL);
-	obs_websocket_vendor_register_request(vendor, "record_split", websocket_split_record, NULL);
-	obs_websocket_vendor_register_request(vendor, "record_add_chapter", websocket_add_chapter_record, NULL);
-	obs_websocket_vendor_register_request(vendor, "record_stop", websocket_stop_record, NULL);
-	obs_websocket_vendor_register_request(vendor, "replay_buffer_start", websocket_start_replay_buffer, NULL);
-	obs_websocket_vendor_register_request(vendor, "replay_buffer_stop", websocket_stop_replay_buffer, NULL);
-	obs_websocket_vendor_register_request(vendor, "replay_buffer_save", websocket_save_replay_buffer, NULL);
-	obs_websocket_vendor_register_request(vendor, "stream_start", websocket_start_stream, NULL);
-	obs_websocket_vendor_register_request(vendor, "stream_stop", websocket_stop_stream, NULL);
+	obs_websocket_vendor_register_request(vendor, "StartRecord", websocket_start_record, NULL);
+	obs_websocket_vendor_register_request(vendor, "PauseRecord", websocket_pause_record, NULL);
+	obs_websocket_vendor_register_request(vendor, "ResumeRecord", websocket_unpause_record, NULL);
+	obs_websocket_vendor_register_request(vendor, "SplitRecordFile", websocket_split_record, NULL);
+	obs_websocket_vendor_register_request(vendor, "CreateRecordChapter", websocket_add_chapter_record, NULL);
+	obs_websocket_vendor_register_request(vendor, "StopRecord", websocket_stop_record, NULL);
+	obs_websocket_vendor_register_request(vendor, "StartReplayBuffer", websocket_start_replay_buffer, NULL);
+	obs_websocket_vendor_register_request(vendor, "StopReplayBuffer", websocket_stop_replay_buffer, NULL);
+	obs_websocket_vendor_register_request(vendor, "SaveReplayBuffer", websocket_save_replay_buffer, NULL);
+	obs_websocket_vendor_register_request(vendor, "StartStream", websocket_start_stream, NULL);
+	obs_websocket_vendor_register_request(vendor, "StopStream", websocket_stop_stream, NULL);
 
 	return true;
 }

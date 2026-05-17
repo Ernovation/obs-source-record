@@ -13,7 +13,7 @@ These fields are accepted by every request:
 
 ## Requests
 
-### `record_start`
+### `StartRecord`
 
 Start recording a source.
 
@@ -29,7 +29,7 @@ Start recording a source.
 
 ---
 
-### `record_stop`
+### `StopRecord`
 
 Stop recording a source.
 
@@ -42,7 +42,7 @@ Stop recording a source.
 
 ---
 
-### `record_pause`
+### `PauseRecord`
 
 Pause an active recording.
 
@@ -55,7 +55,7 @@ Pause an active recording.
 
 ---
 
-### `record_unpause`
+### `ResumeRecord`
 
 Resume a paused recording.
 
@@ -68,7 +68,7 @@ Resume a paused recording.
 
 ---
 
-### `record_split`
+### `SplitRecordFile`
 
 Split the current recording into a new file (requires a muxer that supports file splitting).
 
@@ -81,7 +81,7 @@ Split the current recording into a new file (requires a muxer that supports file
 
 ---
 
-### `record_add_chapter`
+### `CreateRecordChapter`
 
 Add a chapter marker to the current recording.
 
@@ -95,7 +95,7 @@ Add a chapter marker to the current recording.
 
 ---
 
-### `replay_buffer_start`
+### `StartReplayBuffer`
 
 Start the replay buffer for a source.
 
@@ -110,7 +110,7 @@ Start the replay buffer for a source.
 
 ---
 
-### `replay_buffer_stop`
+### `StopReplayBuffer`
 
 Stop the replay buffer for a source.
 
@@ -123,7 +123,7 @@ Stop the replay buffer for a source.
 
 ---
 
-### `replay_buffer_save`
+### `SaveReplayBuffer`
 
 Save the current replay buffer to disk.
 
@@ -136,7 +136,7 @@ Save the current replay buffer to disk.
 
 ---
 
-### `stream_start`
+### `StartStream`
 
 Start streaming a source.
 
@@ -152,7 +152,7 @@ Start streaming a source.
 
 ---
 
-### `stream_stop`
+### `StopStream`
 
 Stop streaming a source.
 
