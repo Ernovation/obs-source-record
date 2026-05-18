@@ -61,6 +61,9 @@ struct source_record_filter_context {
 
 DARRAY(obs_source_t *) source_record_filters;
 
+static void remove_filter(void *data, calldata_t *cd);
+static void replay_buffer_saved_event(void *data, calldata_t *cd);
+
 static void *vendor;
 
 static void source_record_emit_event(const char *event_name, obs_data_t *data)
@@ -341,44 +344,90 @@ static void release_encoders(void *param)
 
 struct stop_output {
 	struct source_record_filter_context *context;
+	obs_source_t *source;
 	obs_output_t *output;
 	const char *stop_event_name;
 };
+
+static struct stop_output *create_stop_output(struct source_record_filter_context *context, obs_output_t *output,
+					      const char *stop_event_name)
+{
+	struct stop_output *so = bmalloc(sizeof(struct stop_output));
+	so->context = context;
+	so->source = context && context->source ? obs_source_get_ref(context->source) : NULL;
+	so->output = output;
+	so->stop_event_name = stop_event_name;
+	return so;
+}
+
+static void free_stop_output(struct stop_output *so)
+{
+	if (so->source)
+		obs_source_release(so->source);
+	bfree(so);
+}
+
+static void finalize_stop_output_task(void *data)
+{
+	struct stop_output *so = data;
+	// We only release the output here. Context and encoders are handled earlier or in destroy.
+	obs_output_release(so->output);
+	free_stop_output(so);
+}
 
 void release_output_stopped(void *data, calldata_t *cd)
 {
 	UNUSED_PARAMETER(cd);
 	struct stop_output *so = data;
-	if (so->stop_event_name && !so->context->closing) {
-		obs_data_t *event_data = source_record_make_event_data(so->context, so->output);
+	struct source_record_filter_context *context = so->context;
+
+	if (so->source)
+		context = obs_obj_get_data(so->source);
+
+
+	if (so->stop_event_name && context && !context->closing) {
+		obs_data_t *event_data = source_record_make_event_data(context, so->output);
 		source_record_emit_event(so->stop_event_name, event_data);
 		obs_data_release(event_data);
 	}
-	if (so->context->exiting)
-		obs_output_release(so->output);
-	else
-		run_queued((obs_task_t)obs_output_release, so->output);
-	if (so->context->encoder || so->context->audioEncoder[0]) {
-		if (so->context->exiting || so->context->closing)
-			release_encoders(so->context);
-		else
-			run_queued(release_encoders, so->context);
+
+	if (context) {
+		if (context->encoder || context->audioEncoder[0])
+			release_encoders(context);
 	}
-	bfree(data);
+
+	// Drop the source reference immediately so source_record_filter_destroy isn't blocked 
+	// from cleaning up the audio thread if OBS is shutting down.
+	signal_handler_t *sh = obs_output_get_signal_handler(so->output);
+	if (sh) {
+		signal_handler_disconnect(sh, "stop", release_output_stopped, so);
+		if (context) {
+			signal_handler_disconnect(sh, "stop", remove_filter, context);
+			signal_handler_disconnect(sh, "saved", replay_buffer_saved_event, context);
+		}
+	}
+
+	if (so->source) {
+		obs_source_release(so->source);
+		so->source = NULL;
+	}
+	so->context = NULL;
+
+	run_queued(finalize_stop_output_task, so);
 }
 
 static void force_stop_output_task(void *data)
 {
 	struct stop_output *so = data;
 	signal_handler_t *sh = obs_output_get_signal_handler(so->output);
-	if (sh) {
+	bool active = obs_output_active(so->output);
+	if (sh && active) {
 		signal_handler_connect(sh, "stop", release_output_stopped, data);
-	}
-	obs_output_force_stop(so->output);
-	if (!sh) {
-		obs_output_release(so->output);
-		release_encoders(so->context);
-		bfree(data);
+		obs_output_force_stop(so->output);
+	} else {
+		if (active)
+			obs_output_force_stop(so->output);
+		release_output_stopped(data, NULL);
 	}
 }
 
@@ -443,18 +492,36 @@ static void ensure_directory(char *path)
 #endif
 }
 
+struct remove_filter_task_data {
+	obs_source_t *source;
+	obs_source_t *filter;
+};
+
+static void remove_filter_task(void *data)
+{
+	struct remove_filter_task_data *rfd = data;
+	obs_source_filter_remove(rfd->source, rfd->filter);
+	obs_source_release(rfd->source);
+	obs_source_release(rfd->filter);
+	bfree(rfd);
+}
+
 static void remove_filter(void *data, calldata_t *calldata)
 {
-	UNUSED_PARAMETER(calldata);
 	struct source_record_filter_context *filter = data;
-	signal_handler_t *sh = obs_output_get_signal_handler(filter->fileOutput);
+	obs_output_t *output = NULL;
+	calldata_get_ptr(calldata, "output", &output);
+	signal_handler_t *sh = obs_output_get_signal_handler(output ? output : filter->fileOutput);
 	signal_handler_disconnect(sh, "stop", remove_filter, filter);
 	obs_source_t *source = obs_filter_get_parent(filter->source);
 	if (!source && filter->view) {
 		source = obs_view_get_source(filter->view, SOURCE_CHANNEL);
 		obs_source_release(source);
 	}
-	obs_source_filter_remove(source, filter->source);
+	struct remove_filter_task_data *rfd = bzalloc(sizeof(struct remove_filter_task_data));
+	rfd->source = source ? obs_source_get_ref(source) : NULL;
+	rfd->filter = obs_source_get_ref(filter->source);
+	run_queued(remove_filter_task, rfd);
 }
 
 static void stop_output_sync(struct source_record_filter_context *context, obs_output_t *output)
@@ -462,8 +529,10 @@ static void stop_output_sync(struct source_record_filter_context *context, obs_o
 	if (!output)
 		return;
 	signal_handler_t *sh = obs_output_get_signal_handler(output);
-	if (sh)
+	if (sh) {
 		signal_handler_disconnect(sh, "stop", remove_filter, context);
+		signal_handler_disconnect(sh, "saved", replay_buffer_saved_event, context);
+	}
 	if (obs_output_active(output))
 		obs_output_force_stop(output);
 }
@@ -961,7 +1030,9 @@ static void source_record_filter_update(void *data, obs_data_t *settings)
 		obs_source_release(background_source);
 	}
 
-	if (record != filter->record) {
+	bool record_changed = (record != filter->record);
+	filter->record = record;
+	if (record_changed) {
 		if (record) {
 			if (obs_source_enabled(filter->source) && filter->video_output)
 				start_file_output(filter, settings);
@@ -969,15 +1040,13 @@ static void source_record_filter_update(void *data, obs_data_t *settings)
 			if (filter->closing) {
 				stop_output_sync(filter, filter->fileOutput);
 			} else {
-				struct stop_output *so = bmalloc(sizeof(struct stop_output));
-				so->output = filter->fileOutput;
-				so->context = filter;
-				so->stop_event_name = "RecordingStopped";
-				run_queued(force_stop_output_task, so);
+				struct stop_output *so =
+					create_stop_output(filter, filter->fileOutput, "RecordingStopped");
+				force_stop_output_task(so);
 				filter->fileOutput = NULL;
 			}
 		}
-		filter->record = record;
+		
 	}
 
 	if (record && filter->fileOutput && filter->last_frontend_event == OBS_FRONTEND_EVENT_RECORDING_PAUSED &&
@@ -990,7 +1059,9 @@ static void source_record_filter_update(void *data, obs_data_t *settings)
 		filter->last_frontend_event = -1;
 	}
 
-	if (replay_buffer != filter->replayBuffer) {
+	bool replay_changed = (replay_buffer != filter->replayBuffer);
+	filter->replayBuffer = replay_buffer;
+	if (replay_changed) {
 		if (replay_buffer) {
 			if (obs_source_enabled(filter->source) && filter->video_output)
 				start_replay_output(filter, settings);
@@ -1001,26 +1072,21 @@ static void source_record_filter_update(void *data, obs_data_t *settings)
 			if (filter->closing) {
 				stop_output_sync(filter, filter->replayOutput);
 			} else {
-				struct stop_output *so = bmalloc(sizeof(struct stop_output));
-				so->output = filter->replayOutput;
-				so->context = filter;
-				so->stop_event_name = "ReplayBufferStopped";
-				run_queued(force_stop_output_task, so);
+				struct stop_output *so =
+					create_stop_output(filter, filter->replayOutput, "ReplayBufferStopped");
+				force_stop_output_task(so);
 				filter->replayOutput = NULL;
 			}
 		}
 
-		filter->replayBuffer = replay_buffer;
+		
 	} else if (replay_buffer && filter->replayOutput && obs_source_enabled(filter->source)) {
 		if (filter->replay_buffer_duration != obs_data_get_int(settings, "replay_duration")) {
 			obs_data_t *hotkeys = obs_hotkeys_save_output(filter->replayOutput);
 			obs_data_set_obj(settings, "replay_hotkeys", hotkeys);
 			obs_data_release(hotkeys);
-			struct stop_output *so = bmalloc(sizeof(struct stop_output));
-			so->output = filter->replayOutput;
-			so->context = filter;
-			so->stop_event_name = NULL;
-			run_queued(force_stop_output_task, so);
+			struct stop_output *so = create_stop_output(filter, filter->replayOutput, NULL);
+			force_stop_output_task(so);
 			filter->replayOutput = NULL;
 			start_replay_output(filter, settings);
 		}
@@ -1055,7 +1121,9 @@ static void source_record_filter_update(void *data, obs_data_t *settings)
 		obs_source_release(view_source);
 	}
 
-	if (stream != filter->stream) {
+	bool stream_changed = (stream != filter->stream);
+	filter->stream = stream;
+	if (stream_changed) {
 		if (stream) {
 			if (obs_source_enabled(filter->source) && filter->video_output)
 				start_stream_output(filter, settings);
@@ -1063,18 +1131,19 @@ static void source_record_filter_update(void *data, obs_data_t *settings)
 			if (filter->closing) {
 				stop_output_sync(filter, filter->streamOutput);
 			} else {
-				struct stop_output *so = bmalloc(sizeof(struct stop_output));
-				so->output = filter->streamOutput;
-				so->context = filter;
-				so->stop_event_name = "StreamingStopped";
-				run_queued(force_stop_output_task, so);
+				struct stop_output *so =
+					create_stop_output(filter, filter->streamOutput, "StreamingStopped");
+				force_stop_output_task(so);
 				filter->streamOutput = NULL;
 			}
 		}
-		filter->stream = stream;
+		
 	}
 
 	if (!replay_buffer && !record && !stream) {
+		if (filter->view) {
+			obs_view_set_source(filter->view, SOURCE_CHANNEL, NULL);
+		}
 		if (filter->encoder && !obs_encoder_active(filter->encoder)) {
 			obs_encoder_release(filter->encoder);
 			filter->encoder = NULL;
@@ -1271,6 +1340,27 @@ static void source_record_filter_destroy(void *data)
 		os_sleep_ms(10);
 	}
 
+	if (context->fileOutput) {
+		signal_handler_t *sh = obs_output_get_signal_handler(context->fileOutput);
+		if (sh) {
+			signal_handler_disconnect(sh, "stop", remove_filter, context);
+			signal_handler_disconnect(sh, "saved", replay_buffer_saved_event, context);
+		}
+	}
+	if (context->streamOutput) {
+		signal_handler_t *sh = obs_output_get_signal_handler(context->streamOutput);
+		if (sh) {
+			signal_handler_disconnect(sh, "stop", remove_filter, context);
+			signal_handler_disconnect(sh, "saved", replay_buffer_saved_event, context);
+		}
+	}
+	if (context->replayOutput) {
+		signal_handler_t *sh = obs_output_get_signal_handler(context->replayOutput);
+		if (sh) {
+			signal_handler_disconnect(sh, "stop", remove_filter, context);
+			signal_handler_disconnect(sh, "saved", replay_buffer_saved_event, context);
+		}
+	}
 	obs_output_release(context->fileOutput);
 	obs_output_release(context->streamOutput);
 	obs_output_release(context->replayOutput);
@@ -1468,29 +1558,35 @@ static void source_record_filter_tick(void *data, float seconds)
 
 	if (context->restart && context->output_active) {
 		if (context->fileOutput) {
-			struct stop_output *so = bmalloc(sizeof(struct stop_output));
-			so->output = context->fileOutput;
-			so->context = context;
-			run_queued(force_stop_output_task, so);
+			signal_handler_t *rsh = obs_output_get_signal_handler(context->fileOutput);
+			if (rsh)
+				signal_handler_disconnect(rsh, "stop", remove_filter, context);
+			struct stop_output *so = create_stop_output(context, context->fileOutput, NULL);
+			force_stop_output_task(so);
 			context->fileOutput = NULL;
 		}
 		if (context->streamOutput) {
-			struct stop_output *so = bmalloc(sizeof(struct stop_output));
-			so->output = context->streamOutput;
-			so->context = context;
-			run_queued(force_stop_output_task, so);
+			signal_handler_t *rsh = obs_output_get_signal_handler(context->streamOutput);
+			if (rsh)
+				signal_handler_disconnect(rsh, "stop", remove_filter, context);
+			struct stop_output *so = create_stop_output(context, context->streamOutput, NULL);
+			force_stop_output_task(so);
 			context->streamOutput = NULL;
 		}
 		if (context->replayOutput) {
-			struct stop_output *so = bmalloc(sizeof(struct stop_output));
-			so->output = context->replayOutput;
-			so->context = context;
-			run_queued(force_stop_output_task, so);
+			signal_handler_t *rsh = obs_output_get_signal_handler(context->replayOutput);
+			if (rsh)
+				signal_handler_disconnect(rsh, "stop", remove_filter, context);
+			struct stop_output *so = create_stop_output(context, context->replayOutput, NULL);
+			force_stop_output_task(so);
 			context->replayOutput = NULL;
 		}
 		context->output_active = false;
 		context->restart = false;
 		obs_source_dec_showing(obs_filter_get_parent(context->source));
+		if (context->view) {
+			obs_view_set_source(context->view, SOURCE_CHANNEL, NULL);
+		}
 	} else if (!context->output_active && obs_source_enabled(context->source) &&
 		   (context->replayBuffer || context->record || context->stream)) {
 		if (context->starting_file_output || context->starting_stream_output || context->starting_replay_output ||
@@ -1531,28 +1627,34 @@ static void source_record_filter_tick(void *data, float seconds)
 		obs_data_release(s);
 	} else if (context->output_active && !obs_source_enabled(context->source)) {
 		if (context->fileOutput) {
-			struct stop_output *so = bmalloc(sizeof(struct stop_output));
-			so->output = context->fileOutput;
-			so->context = context;
-			run_queued(force_stop_output_task, so);
+			signal_handler_t *rsh = obs_output_get_signal_handler(context->fileOutput);
+			if (rsh)
+				signal_handler_disconnect(rsh, "stop", remove_filter, context);
+			struct stop_output *so = create_stop_output(context, context->fileOutput, NULL);
+			force_stop_output_task(so);
 			context->fileOutput = NULL;
 		}
 		if (context->streamOutput) {
-			struct stop_output *so = bmalloc(sizeof(struct stop_output));
-			so->output = context->streamOutput;
-			so->context = context;
-			run_queued(force_stop_output_task, so);
+			signal_handler_t *rsh = obs_output_get_signal_handler(context->streamOutput);
+			if (rsh)
+				signal_handler_disconnect(rsh, "stop", remove_filter, context);
+			struct stop_output *so = create_stop_output(context, context->streamOutput, NULL);
+			force_stop_output_task(so);
 			context->streamOutput = NULL;
 		}
 		if (context->replayOutput) {
-			struct stop_output *so = bmalloc(sizeof(struct stop_output));
-			so->output = context->replayOutput;
-			so->context = context;
-			run_queued(force_stop_output_task, so);
+			signal_handler_t *rsh = obs_output_get_signal_handler(context->replayOutput);
+			if (rsh)
+				signal_handler_disconnect(rsh, "stop", remove_filter, context);
+			struct stop_output *so = create_stop_output(context, context->replayOutput, NULL);
+			force_stop_output_task(so);
 			context->replayOutput = NULL;
 		}
 		context->output_active = false;
 		obs_source_dec_showing(obs_filter_get_parent(context->source));
+		if (context->view) {
+			obs_view_set_source(context->view, SOURCE_CHANNEL, NULL);
+		}
 	}
 
 	if (context->output_active && context->fileOutput && context->record_max_seconds) {
@@ -2347,6 +2449,12 @@ static bool start_replay_buffer_source(obs_source_t *source, obs_data_t *request
 	obs_data_t *settings = obs_source_get_settings(filter);
 	const char *filename = obs_data_get_string(request_data, "filename");
 	struct source_record_filter_context *context = obs_obj_get_data(filter);
+	if (context && context->replayOutput && obs_output_active(context->replayOutput)) {
+		context->restart = false;
+		obs_data_release(settings);
+		obs_source_release(filter);
+		return true;
+	}
 	if (context && context->output_active) {
 		if (strlen(filename)) {
 			if (strstr(filename, "%") || strcmp(filename, obs_data_get_string(settings, "filename_formatting")) != 0) {
